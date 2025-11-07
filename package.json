@@ -1,23 +1,13 @@
 {
   "name": "background-remover-api",
-  "version": "1.0.1",
-  "description": "Free Background Remover API - Works perfectly on Render.com (with Sharp fix)",
+  "version": "1.0.2",
+  "description": "Free BG Remover API - Fixed URI error for Render.com",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
     "dev": "nodemon server.js"
   },
-  "keywords": [
-    "background-removal",
-    "remove-bg",
-    "image-processing",
-    "ai",
-    "sharp",
-    "render",
-    "free-api"
-  ],
-  "author": "Naeem Ahmed",
-  "license": "MIT",
+  "keywords": ["background-removal", "render", "free-api"],
   "dependencies": {
     "@imgly/background-removal-node": "^1.4.5",
     "cors": "^2.8.5",
@@ -30,13 +20,5 @@
   },
   "engines": {
     "node": ">=18.x <=22.x"
-  },
-  "repository": {
-    "type": "git",
-    "url": "https://github.com/yourusername/background-remover-api.git"
-  },
-  "homepage": "https://github.com/yourusername/background-remover-api#readme",
-  "bugs": {
-    "url": "https://github.com/yourusername/background-remover-api/issues"
   }
 }
