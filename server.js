@@ -9,7 +9,7 @@ const fs = require('fs');
 
 const app = express();
 const PORT = process.env.PORT || 10000;
-const API_KEY = process.env.API_KEY || 'demo-key-123';
+const API_KEY = process.env.API_KEY;
 
 // Model directory in /tmp (Render allows this)
 const MODEL_DIR = path.join(os.tmpdir(), 'imgly-models');
