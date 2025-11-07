@@ -9,121 +9,99 @@ const fs = require('fs');
 
 const app = express();
 const PORT = process.env.PORT || 10000;
-const API_KEY = process.env.API_KEY; // Change in Render env vars!
+const API_KEY = process.env.API_KEY; // Set in Render!
 
 // Middleware
 app.use(cors());
 app.use(express.json({ limit: '10mb' }));
-app.use(express.urlencoded({ extended: true }));
 
-// Multer: Store in memory
+// Multer
 const upload = multer({
     storage: multer.memoryStorage(),
-    limits: { fileSize: 10 * 1024 * 1024 }, // 10MB
+    limits: { fileSize: 10 * 1024 * 1024 },
     fileFilter: (req, file, cb) => {
         const allowed = ['image/png', 'image/jpeg', 'image/jpg', 'image/webp'];
-        if (allowed.includes(file.mimetype)) {
-            cb(null, true);
-        } else {
-            cb(new Error('Invalid file type. Only PNG, JPG, JPEG, WebP allowed.'));
-        }
+        allowed.includes(file.mimetype) ? cb(null, true) : cb(new Error('Invalid file type'));
     }
-});
+})
 
-// Pre-download model to /tmp (Render allows writing here)
-const MODEL_PATH = path.join(os.tmpdir(), 'background-removal-model');
+// Model cache in Render's /tmp
+const MODEL_PATH = path.join(os.tmpdir(), 'imgly-models');
 if (!fs.existsSync(MODEL_PATH)) {
     fs.mkdirSync(MODEL_PATH, { recursive: true });
+    console.log('Model cache created:', MODEL_PATH);
 }
 
-// Home route
+// CRITICAL: Use file:// URI format with trailing slash!
+const PUBLIC_PATH_URI = `file://${MODEL_PATH.replace(/\\/g, '/')}/`; // Works on Linux & Windows
+
+// Home
 app.get('/', (req, res) => {
     res.json({
-        message: 'Background Remover API - Fixed & Render Ready',
+        message: 'BG Remover API - FIXED for Render Free Tier',
         status: 'online',
-        usage: 'POST /remove-bg with image file + Authorization: Bearer YOUR_KEY',
-        tip: 'Set API_KEY in Render Environment Variables'
+        tip: 'POST /remove-bg + Authorization: Bearer YOUR_KEY'
     });
 });
 
-// Health check
-app.get('/health', (req, res) => {
-    res.json({ status: 'healthy', timestamp: new Date().toISOString() });
-});
+// Health
+app.get('/health', (req, res) => res.json({ status: 'healthy' }));
 
 // Main endpoint
 app.post('/remove-bg', upload.single('image'), async (req, res) => {
-    // === 1. Auth Check ===
-    const authHeader = req.headers.authorization || '';
-    const token = authHeader.replace('Bearer ', '').trim();
-
+    const token = (req.headers.authorization || '').replace('Bearer ', '').trim();
     if (token !== API_KEY) {
-        return res.status(401).json({ error: 'Unauthorized', tip: 'Use Bearer YOUR_API_KEY' });
+        return res.status(401).json({ error: 'Unauthorized' });
     }
 
-    // === 2. File Check ===
     if (!req.file) {
-        return res.status(400).json({ error: 'No image uploaded', field: 'image' });
+        return res.status(400).json({ error: 'No image uploaded' });
     }
 
-    console.log(`Processing: ${req.file.originalname} | ${req.file.mimetype} | ${(req.file.size / 1024).toFixed(1)} KB`);
+    console.log(`Processing: ${req.file.originalname} (${req.file.mimetype})`);
 
-    let processedBuffer;
-
-    // === 3. Validate & Convert with Sharp ===
+    let inputBuffer;
     try {
-        processedBuffer = await sharp(req.file.buffer)
-            .rotate() // Fix EXIF rotation
-            .flatten({ background: { r: 255, g: 255, b: 255 } }) // Remove alpha issues
-            .png({ quality: 95, compressionLevel: 6 })
+        inputBuffer = await sharp(req.file.buffer)
+            .rotate()
+            .png({ quality: 95 })
             .toBuffer();
     } catch (err) {
-        console.error('Sharp failed:', err.message);
-        return res.status(400).json({
-            error: 'Invalid or corrupted image',
-            details: 'File could not be processed. Try a different image.'
-        });
+        return res.status(400).json({ error: 'Invalid/corrupted image' });
     }
 
-    // === 4. Remove Background ===
     try {
-        console.log('Running AI model...');
-        const resultBlob = await removeBackground(processedBuffer, {
-            model: "medium",
-            publicPath: MODEL_PATH, // Critical for Render!
-            debug: false
+        console.log('Loading AI model (first run downloads ~300MB to /tmp)...');
+        const resultBlob = await removeBackground(inputBuffer, {
+            model: 'medium',
+            publicPath: PUBLIC_PATH_URI, // ← THIS FIXES THE URI ERROR
+            debug: true,
+            progress: (key, current, total) => {
+                console.log(`Downloading ${key}: ${Math.round((current / total) * 100)}%`);
+            }
         });
 
-        const resultBuffer = Buffer.from(await resultBlob.arrayBuffer());
+        const outputBuffer = Buffer.from(await resultBlob.arrayBuffer());
 
-        // === 5. Send Result ===
         res.setHeader('Content-Type', 'image/png');
-        res.setHeader('Content-Disposition', `attachment; filename="nobg_${req.file.originalname.replace(/\.[^/.]+$/, '')}.png"`);
-        res.setHeader('X-Processed-By', 'img.ly + Sharp');
-        res.send(resultBuffer);
+        res.setHeader('Content-Disposition', `attachment; filename="nobg_${req.file.originalname}"`);
+        res.send(outputBuffer);
 
         console.log('Success! Background removed.');
     } catch (err) {
-        console.error('Background removal failed:', err.message);
+        console.error('AI Error:', err);
         res.status(500).json({
-            error: 'AI processing failed',
-            message: err.message,
-            tip: 'Try a simpler image (person/object on solid background)'
+            error: 'Background removal failed',
+            details: err.message
         });
     }
 });
 
-// 404 handler
-app.use('*', (req, res) => {
-    res.status(404).json({ error: 'Endpoint not found' });
-});
+// 404
+app.use('*', (req, res) => res.status(404).json({ error: 'Not found' }));
 
-// Start server
 app.listen(PORT, '0.0.0.0', () => {
-    console.log(`Server LIVE on port ${PORT}`);
-    console.log(`Free Render URL: https://your-service.onrender.com`);
-    console.log(`Model cache: ${MODEL_PATH}`);
-    if (API_KEY === 'your-secret-key-123') {
-        console.log('WARNING: Set API_KEY in Render > Environment Variables!');
-    }
+    console.log(`🚀 Server running on https://your-app.onrender.com:${PORT}`);
+    console.log(`Model URI: ${PUBLIC_PATH_URI}`);
+    console.log(`API_KEY required: ${API_KEY === 'your-secret-key-123' ? 'SET IT IN RENDER!' : 'OK'}`);
 });
