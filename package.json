@@ -1,13 +1,12 @@
 {
   "name": "background-remover-api",
-  "version": "1.0.2",
-  "description": "Free BG Remover API - Fixed URI error for Render.com",
+  "version": "1.0.3",
+  "description": "100% working background remover for Render Free Tier",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
     "dev": "nodemon server.js"
   },
-  "keywords": ["background-removal", "render", "free-api"],
   "dependencies": {
     "@imgly/background-removal-node": "^1.4.5",
     "cors": "^2.8.5",
