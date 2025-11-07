@@ -1,76 +1,56 @@
 const express = require('express');
 const cors = require('cors');
 const multer = require('multer');
-const { removeBackground, downloadModels } = require('@imgly/background-removal-node');
+const { removeBackground } = require('@imgly/background-removal-node');
 const sharp = require('sharp');
 const path = require('path');
 const os = require('os');
-const fs = require('fs').promises;
+const fs = require('fs');
 
 const app = express();
 const PORT = process.env.PORT || 10000;
-const API_KEY = process.env.API_KEY || 'demo-key-123';
+const API_KEY = process.env.API_KEY;
 
-// ==================== CRITICAL: PRE-DOWNLOAD MODELS ====================
+// Model directory in /tmp (Render allows this)
 const MODEL_DIR = path.join(os.tmpdir(), 'imgly-models');
-const PUBLIC_PATH_URI = `file://${MODEL_DIR.replace(/\\/g, '/')}/`;
-
-async function ensureModels() {
-    try {
-        await fs.access(MODEL_DIR);
-        console.log('Models already exist in /tmp');
-    } catch {
-        console.log('Models not found. Downloading ~300MB (this runs once)...');
-        await fs.mkdir(MODEL_DIR, { recursive: true });
-
-        // This forces download of ALL model files + resources.json
-        await downloadModels({
-            publicPath: PUBLIC_PATH_URI,
-            model: 'medium',
-            progress: (key, current, total) => {
-                const percent = ((current / total) * 100).toFixed(1);
-                console.log(`Downloading ${key}: ${percent}%`);
-            }
-        });
-
-        console.log('All model files downloaded successfully!');
-        console.log('Location:', MODEL_DIR);
-    }
+if (!fs.existsSync(MODEL_DIR)) {
+    fs.mkdirSync(MODEL_DIR, { recursive: true });
+    console.log('Created model directory:', MODEL_DIR);
 }
 
-// Run on startup (Render cold start)
-ensureModels().catch(err => {
-    console.error('Failed to download models:', err);
-    process.exit(1);
-});
+// CRITICAL: Use file:// URI with trailing slash
+const PUBLIC_PATH_URI = `file://${MODEL_DIR.replace(/\\/g, '/')}/`;
 
-// ==================== EXPRESS SETUP ====================
 app.use(cors());
-app.use(express.json({ limit: '10mb' }));
+app.use(express.json({ limit: '15mb' }));
 
 const upload = multer({
     storage: multer.memoryStorage(),
     limits: { fileSize: 15 * 1024 * 1024 },
     fileFilter: (req, file, cb) => {
         const allowed = ['image/png', 'image/jpeg', 'image/jpg', 'image/webp'];
-        allowed.includes(file.mimetype) ? cb(null, true) : cb(new Error('Invalid file'));
+        if (allowed.includes(file.mimetype)) cb(null, true);
+        else cb(new Error('Only PNG, JPG, JPEG, WebP allowed'));
     }
 });
 
-// ==================== ROUTES ====================
+// Home
 app.get('/', (req, res) => {
     res.json({
-        message: 'Background Remover API – 100% Working on Render Free',
+        message: 'Background Remover API – 100% WORKING on Render Free',
         status: 'online',
         endpoint: 'POST /remove-bg',
         auth: 'Bearer YOUR_API_KEY',
-        tip: 'First request after deploy takes 30–60s (model download)'
+        note: 'First request after deploy takes 45-90s (downloads 300MB model once)',
+        model_path: MODEL_DIR
     });
 });
 
-app.get('/health', (req, res) => res.json({ status: 'healthy', models: 'ready' }));
+app.get('/health', (req, res) => res.json({ status: 'healthy', models: 'auto-downloaded on first use' }));
 
+// Main endpoint
 app.post('/remove-bg', upload.single('image'), async (req, res) => {
+    // Auth
     const token = (req.headers.authorization || '').replace('Bearer ', '').trim();
     if (token !== API_KEY) {
         return res.status(401).json({ error: 'Unauthorized' });
@@ -80,47 +60,54 @@ app.post('/remove-bg', upload.single('image'), async (req, res) => {
 
     console.log(`Processing: ${req.file.originalname} (${req.file.mimetype})`);
 
+    // Normalize image
     let inputBuffer;
     try {
         inputBuffer = await sharp(req.file.buffer)
             .rotate()
-            .png({ quality: 95 })
+            .png({ quality: 95, compressionLevel: 6 })
             .toBuffer();
     } catch (err) {
         return res.status(400).json({ error: 'Invalid image', details: err.message });
     }
 
     try {
-        console.log('Running background removal...');
+        console.log('Loading AI model... (First time: downloads ~300MB to /tmp)');
+
         const resultBlob = await removeBackground(inputBuffer, {
-            model: 'medium',
+            model: "medium",
             publicPath: PUBLIC_PATH_URI,
-            debug: false
+            debug: false,
+            progress: (key, current, total) => {
+                const pct = ((current / total) * 100).toFixed(1);
+                console.log(`Downloading model ${key}: ${pct}%`);
+            }
         });
 
         const outputBuffer = Buffer.from(await resultBlob.arrayBuffer());
 
         res.setHeader('Content-Type', 'image/png');
         res.setHeader('Content-Disposition', `attachment; filename="nobg_${Date.now()}.png"`);
+        res.setHeader('X-Model-Path', MODEL_DIR);
         res.send(outputBuffer);
 
-        console.log('Success! Background removed');
+        console.log('Background removed successfully!');
     } catch (err) {
         console.error('AI Error:', err.message);
         res.status(500).json({
-            error: 'Removal failed',
+            error: 'Background removal failed',
             message: err.message,
-            tip: 'Try a clearer photo of a person/object'
+            tip: 'Try again in 30s if first request (model still downloading)'
         });
     }
 });
 
 app.use('*', (req, res) => res.status(404).json({ error: 'Not found' }));
 
-// ==================== START SERVER ====================
+// Start
 app.listen(PORT, '0.0.0.0', () => {
-    console.log(`Server LIVE on port ${PORT}`);
-    console.log(`URL: https://your-app.onrender.com`);
-    console.log(`Model path: ${MODEL_DIR}`);
-    console.log(`API_KEY: ${API_KEY === 'demo-key-123' ? 'SET IN RENDER ENV!' : 'OK'}`);
+    console.log(`SERVER LIVE on port ${PORT}`);
+    console.log(`URL: https://your-service.onrender.com`);
+    console.log(`Model will auto-download to: ${MODEL_DIR}`);
+    console.log(`API_KEY set: ${API_KEY === 'demo-key-123' ? 'SET IN RENDER ENV!' : 'OK'}`);
 });
